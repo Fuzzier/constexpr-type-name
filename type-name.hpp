@@ -33,6 +33,11 @@
 
 namespace nsfx {
 
+/**
+ * @brief A fixed length string.
+ *
+ * @tparam N The capacity of the string.
+ */
 template<std::size_t N>
 struct fixed_string_t
 {
@@ -47,20 +52,22 @@ struct fixed_string_t
     constexpr fixed_string_t(const char* str, std::size_t len) noexcept
         : fixed_string_t{}
     {
-        for (size_ = 0; size_ < len && size_ < N; ++size_)
+        for (size_ = 0; size_ < len && size_ < N - 1; ++size_)
         {
             data_[size_] = str[size_];
         }
+        data_[size_] = '\0';
     }
 
     template<std::size_t M>
     constexpr fixed_string_t(const char (&str)[M]) noexcept
         : fixed_string_t{}
     {
-        for (size_ = 0; size_ < M && size_ < N; ++size_)
+        for (size_ = 0; size_ < M - 1 && size_ < N - 1; ++size_)
         {
             data_[size_] = str[size_];
         }
+        data_[size_] = '\0';
     }
 
     constexpr std::string_view view(void) const noexcept
@@ -114,6 +121,9 @@ struct fixed_string_t
 
 };
 
+/**
+ * @brief Make a fixed string from a string literal.
+ */
 template<std::size_t N>
 constexpr fixed_string_t<N>
 to_fixed_string(const char (&src)[N]) noexcept
@@ -222,6 +232,10 @@ constexpr std::size_t match(
         {
             // If `sub` is followed by an identifier character, then
             // it is part of a long identifier, and is not removed.
+            // e.g. "structA" :  "struct" is not removed.
+            //       ^^^^^^
+            // e.g. "struct(" :  "struct" is removed.
+            //       ^^^^^^
             if (iskey(str[pos + L]))
             {
                 n = 0;
@@ -232,6 +246,8 @@ constexpr std::size_t match(
                 if (str[pos + L] == ' ')
                 {
                     // The SPACE is to be removed.
+                    // e.g. "struct " :  space after "struct" is also removed.
+                    //             ^
                     ++n;
                 }
             }
@@ -242,7 +258,7 @@ constexpr std::size_t match(
 }
 
 /**
- * @brief Obtain the raw type name of a type.
+ * @brief Get the raw type name of a type.
  *
  * @remark
  *   Since `__PRETTY_FUNCTION__` and `__FUNCSIG__` contains the class name and
@@ -257,22 +273,29 @@ constexpr std::size_t match(
 template<class T>
 struct impl
 {
+    /**
+     * @brief Get the raw type name.
+     *
+     * @return The returned `fixed_string_t<>` is zero-terminated.
+     */
     static constexpr auto raw(void)
     {
         // `full` is zero-terminated.
         constexpr auto full = to_fixed_string(NSFX_FUNCTION);
         // Extract type name from `full`.
         constexpr std::size_t N = full.capacity_;
-        constexpr std::size_t M = (N - 1 - num_misc_chars) / num_appearance;
-        // `name` is **not** zero-terminated.
-        return fixed_string_t<M>{full.data_ + name_start_pos, M};
+        constexpr std::size_t L = (N - 1 - num_misc_chars) / num_appearance;
+        // `name` is zero-terminated.
+        return fixed_string_t<L+1>{full.data_ + name_start_pos, L};
     }
 
     /**
-     * @brief Obtain the size of tidy type name.
+     * @brief Get the size of tidy type name.
      *
      * The keywords `enum`, `class`, `struct` and `__cdecl` are removed from
      * the type name.
+     *
+     * @return The returned `fixed_string_t<>` is zero-terminated.
      */
     static constexpr std::size_t dry(void) noexcept
     {
@@ -280,7 +303,7 @@ struct impl
 #if defined(__clang__) || defined(__GNUC__)
         return name.capacity_;
 #elif defined(_MSC_VER)
-        constexpr std::size_t len = name.capacity_;
+        constexpr std::size_t len = name.capacity_ - 1;
         std::size_t size = 0;
         std::size_t pos = 0;
         while (true)
@@ -313,6 +336,12 @@ struct impl
                 break;
             }
         }
+        // Strip trailing spaces.
+        while (pos && name[pos - 1] == ' ')
+        {
+            --pos;
+            --size;
+        }
         return size;
 #else
 # error Unsupported compiler.
@@ -320,12 +349,12 @@ struct impl
     }
 
     /**
-     * @brief Obtain the tidy type name.
+     * @brief Get the tidy type name.
      *
      * The keywords `enum`, `class`, `struct` and `__cdecl` are removed from
      * the type name.
      *
-     * @return A `fixed_string_t<>` object.
+     * @return The returned `fixed_string_t<>` is zero-terminated.
      */
     static constexpr auto tidy(void) noexcept
     {
@@ -333,9 +362,9 @@ struct impl
 #if defined(__clang__) || defined(__GNUC__)
         return name;
 #elif defined(_MSC_VER)
-        constexpr std::size_t len = name.capacity_;
-        constexpr std::size_t M = dry();
-        fixed_string_t<M> dst {};
+        constexpr std::size_t len = name.capacity_ - 1;
+        constexpr std::size_t L = dry();
+        fixed_string_t<L+1> dst {};
         std::size_t pos = 0;
         while (true)
         {
@@ -350,21 +379,22 @@ struct impl
             n = match(name, pos, len, "__cdecl");
             if (n) { pos += n; continue; }
             // The character before `sub` is not an identifier character.
-            while (pos < len && iskey(name[pos]))
+            while (dst.size_ < L && pos < len && iskey(name[pos]))
             {
-                dst.data_[dst.size_++] = name[pos++];
+                dst[dst.size_++] = name[pos++];
             }
             // The character before `sub` is not an identifier character.
-            while (pos < len && !iskey(name[pos]))
+            while (dst.size_ < L && pos < len && !iskey(name[pos]))
             {
-                dst.data_[dst.size_++] = name[pos++];
+                dst[dst.size_++] = name[pos++];
             }
             // The current character is a non-identifier character.
-            if (pos == len)
+            if (dst.size_ == L || pos == len)
             {
                 break;
             }
         }
+        dst[L] = '\0';
         return dst;
 #else
 # error Unsupported compiler.
@@ -372,11 +402,11 @@ struct impl
     }
 
     /**
-     * @brief Get the base name of the type.
+     * @brief Get the unqualified type name.
      *
      * @pre The type **must** be a value type.
      *
-     * @return The namespace part is removed.
+     * @return The returned `fixed_string_t<>` is zero-terminated.
      */
     static constexpr auto base(void) noexcept
     {
@@ -434,9 +464,9 @@ struct type_name
     using type = T;
 
     /**
-     * @brief Obtain the type name.
+     * @brief Get the raw type name.
      *
-     * @return A `fixed_string_t<>` object.
+     * @return The returned `fixed_string_t<>` is zero-terminated.
      */
     static constexpr auto raw(void) noexcept
     {
@@ -444,9 +474,9 @@ struct type_name
     }
 
     /**
-     * @brief Obtain the type name.
+     * @brief Get the type name.
      *
-     * @return A `fixed_string_t<>` object.
+     * @return The returned `fixed_string_t<>` is zero-terminated.
      */
     static constexpr auto name(void) noexcept
     {
@@ -454,9 +484,9 @@ struct type_name
     }
 
     /**
-     * @brief Obtain the unqualified type name.
+     * @brief Get the unqualified type name.
      *
-     * @return A `fixed_string_t<>` object.
+     * @return The returned `fixed_string_t<>` is zero-terminated.
      */
     static constexpr auto base(void) noexcept
     {
@@ -466,7 +496,6 @@ struct type_name
 };
 
 
-////////////////////////////////////////
 template<std::size_t N>
 std::ostream& operator<<(std::ostream& os, const fixed_string_t<N>& s)
 {
